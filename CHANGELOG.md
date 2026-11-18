@@ -1,0 +1,11 @@
+## v0.1.7
+
+Windows 版，适配 Antigravity 2.33.0 独立桌面版，运行安装脚本需要 Node.js 20 或更新版本。
+
+- 顶部壁纸延伸到原有菜单栏和 Windows 窗口按钮后面。
+- 支持本地图片、循环视频和 Steam Wallpaper Engine 壁纸库。
+- 支持实时调节亮度、饱和度、锐化、灰度、模糊、主题遮罩、播放速度和水平翻转。
+- Gemini 猫猫按钮支持拖动并记住位置。点击即可打开壁纸面板。
+- 新建对话和已有对话使用透明玻璃发送框。「自动化」和「自定义配置」共用壁纸。
+
+解压 Windows ZIP，退出 Antigravity 后运行 `Install.cmd`。从早期版本升级时先运行 `Uninstall.cmd`。源码和测试随包提供，素材授权见 `NOTICE.md`。
