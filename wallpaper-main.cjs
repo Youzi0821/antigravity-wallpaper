@@ -109,9 +109,19 @@ function updateTitlebar(win) {
     win.setTitleBarOverlay({ color: mediaUrl ? '#00000000' : titlebarColors.get(win) });
 }
 
-function attach(contents, targetUrl, win, backgroundColor) {
+function localOrigin(targetUrl) {
     const target = new URL(targetUrl);
-    if (target.protocol !== 'https:' || target.hostname !== '127.0.0.1' || !target.port) return;
+    if (target.protocol === 'https:' && target.hostname === '127.0.0.1' && target.port) return target.origin;
+}
+
+function updateOrigin(contents, targetUrl) {
+    const entry = windows.get(contents);
+    if (entry) entry.origin = localOrigin(targetUrl);
+}
+
+function attach(contents, targetUrl, win, backgroundColor) {
+    const origin = localOrigin(targetUrl);
+    if (!origin) return;
     if (!config) {
         let saved;
         try { saved = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch {}
@@ -136,7 +146,7 @@ function attach(contents, targetUrl, win, backgroundColor) {
         });
     }
     const titlebar = process.platform === 'win32' && typeof win?.setTitleBarOverlay === 'function' ? win : undefined;
-    windows.set(contents, { origin: target.origin, titlebar });
+    windows.set(contents, { origin, titlebar });
     if (titlebar) {
         titlebarColors.set(titlebar, backgroundColor);
         if (mediaUrl) updateTitlebar(titlebar);
@@ -229,4 +239,4 @@ function respond(request) {
     return url === mediaUrl ? serveFrame(mediaUrl, mime) : serveMedia(request, file, mime);
 }
 
-module.exports = { attach, respond, titlebarColor };
+module.exports = { attach, respond, titlebarColor, updateOrigin };

@@ -1,8 +1,8 @@
 # Antigravity 聊天壁纸
 
-Windows 本地外观扩展，适配 Google Antigravity 2.33.0 独立桌面版。可以在应用背景中播放已有的 Wallpaper Engine 视频壁纸，或显示自己的图片。
+Windows 本地外观扩展。v0.1.8 适配 Google Antigravity 2.33.0 和 2.34.0 独立桌面版。可以在应用背景中播放已有的 Wallpaper Engine 视频壁纸，或显示自己的图片。
 
-从 [v0.1.7 发布页](https://github.com/Youzi0821/antigravity-wallpaper/releases/tag/v0.1.7) 下载 Windows 安装包和 SHA-256 校验文件。这个项目是独立的社区扩展。
+Windows 安装包和 SHA-256 校验文件见 [GitHub 发布页](https://github.com/Youzi0821/antigravity-wallpaper/releases)。这个项目是独立的社区扩展。
 
 ## 安装
 
@@ -10,7 +10,7 @@ Windows 本地外观扩展，适配 Google Antigravity 2.33.0 独立桌面版。
 2. 从 Antigravity 菜单退出应用，双击 `Install.cmd`。
 3. 打开 Antigravity，点击窗口右下角的 Gemini 猫猫图标。
 
-从旧版本升级时，先运行 `Uninstall.cmd`，再安装 0.1.7。已有的壁纸偏好会保留。
+若旧版壁纸扩展仍在生效，先运行 `Uninstall.cmd`，再安装新版。若 Antigravity 更新已覆盖壁纸扩展，直接运行 `Install.cmd` 即可。已有的壁纸偏好会保留。
 
 ## 使用
 
@@ -38,10 +38,10 @@ node --test wallpaper-library.test.cjs wallpaper-settings.test.cjs
 node manage.cjs check
 ```
 
-要从标签生成完整安装包，在 Git 仓库内运行：
+要从当前提交生成完整安装包，在 Git 仓库内运行：
 
 ```powershell
-git archive --format=zip --prefix=antigravity-wallpaper/ --output=Antigravity-Wallpaper-0.1.7-Windows.zip v0.1.7
+git archive --format=zip --prefix=antigravity-wallpaper/ --output=Antigravity-Wallpaper-Windows.zip HEAD
 ```
 
 ## 授权与致谢

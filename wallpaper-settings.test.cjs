@@ -84,4 +84,17 @@ test('older preferences gain neutral effects and new settings survive a reload',
     assert.equal(overlayColor, '#fafafa');
     await menuSource.invoke('settings', { enabled: true });
     assert.equal(overlayColor, '#00000000');
+
+    await t.test('the existing Hub window follows a restarted language server', async () => {
+        const newUrl = 'https://127.0.0.1:8001/';
+        menuSource.updateOrigin(sender, newUrl);
+        assert.equal(await menuSource.invoke('state'), null);
+        frame.url = newUrl;
+        assert.equal((await menuSource.invoke('state'))?.enabled, true);
+
+        const outside = 'https://example.com:8002/';
+        menuSource.updateOrigin(sender, outside);
+        frame.url = outside;
+        assert.equal(await menuSource.invoke('state'), null);
+    });
 });

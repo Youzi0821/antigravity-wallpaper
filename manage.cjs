@@ -7,8 +7,8 @@ const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { openAsar, sha256 } = require('./asar.cjs');
 
-const VERSION = '0.1.7';
-const SUPPORTED = '2.33.0';
+const VERSION = '0.1.8';
+const SUPPORTED = ['2.33.0', '2.34.0'];
 const MARKER = '/* agy-wallpaper-local */';
 
 function replaceOne(text, anchor, insert) {
@@ -19,8 +19,8 @@ function replaceOne(text, anchor, insert) {
 function buildArchive(original) {
     const archive = openAsar(original);
     const info = JSON.parse(archive.read('package.json'));
-    if (info.name !== 'antigravity' || info.version !== SUPPORTED) {
-        throw new Error('此扩展适配 Antigravity ' + SUPPORTED + '，当前版本为 ' + info.version + '。');
+    if (info.name !== 'antigravity' || !SUPPORTED.includes(info.version)) {
+        throw new Error('此扩展适配 Antigravity ' + SUPPORTED.join('、') + '，当前版本为 ' + info.version + '。');
     }
     const utils = 'dist/utils.js';
     const preload = 'dist/preload.js';
@@ -32,15 +32,25 @@ function buildArchive(original) {
         throw new Error('猫猫图标文件损坏。');
     }
     const wallpaperUi = source('wallpaper-ui.js').replace('__AGY_WALLPAPER_MASCOT__', mascot.toString('base64'));
-    const launchAnchor = '    void win.loadURL(url);';
+    let utilsSource = archive.read(utils);
+    if (info.version === '2.34.0') {
+        utilsSource = replaceOne(utilsSource, '    void loadHubWindowUrl(win, url, { skipBootstrapMint });',
+            `    ${MARKER} try { if (!skipBootstrapMint) require('./wallpaper-main.cjs').attach(hubContents, url, win, backgroundColor); }
+    catch (error) { console.warn('[Wallpaper]', error.message); }`);
+        utilsSource = replaceOne(utilsSource, '        await win.loadURL(url);',
+            `        try { require('./wallpaper-main.cjs').updateOrigin(getHubWebContents(win), url); }
+        catch (error) { console.warn('[Wallpaper]', error.message); }`);
+    } else {
+        utilsSource = replaceOne(utilsSource, '    void win.loadURL(url);',
+            `    ${MARKER} try { require('./wallpaper-main.cjs').attach(win.webContents, url, options?.partition ? undefined : win, backgroundColor); }
+    catch (error) { console.warn('[Wallpaper]', error.message); }`);
+    }
     const schemeAnchor = '        const originalHost = exports.extensionAuthorities.get(authority);';
     const overlayAnchor = '                color: options.color,';
     const handlersSource = archive.read(handlers);
     if (handlersSource.split(overlayAnchor).length !== 2) throw new Error('找不到唯一的标题栏配色接入点。');
     const changes = {
-        [utils]: replaceOne(archive.read(utils), launchAnchor,
-            `    ${MARKER} try { require('./wallpaper-main.cjs').attach(win.webContents, url, options?.partition ? undefined : win, backgroundColor); }
-    catch (error) { console.warn('[Wallpaper]', error.message); }`),
+        [utils]: utilsSource,
         [preload]: archive.read(preload) + '\n' + wallpaperUi,
         [scheme]: replaceOne(archive.read(scheme), schemeAnchor,
             "        if (authority === 'agy-wallpaper') return require('./wallpaper-main.cjs').respond(request);"),
@@ -86,9 +96,10 @@ function manage(command, directory) {
     const lock = path.join(path.dirname(target), 'agy-wallpaper.lock');
     if (command === 'check') {
         const bytes = fs.readFileSync(target);
-        if (openAsar(bytes).read('dist/utils.js').includes(MARKER)) return console.log('壁纸扩展已安装。');
+        const archive = openAsar(bytes);
+        if (archive.read('dist/utils.js').includes(MARKER)) return console.log('壁纸扩展已安装。');
         buildArchive(bytes);
-        return console.log('兼容性检查通过，可安装到 Antigravity ' + SUPPORTED + '。');
+        return console.log('兼容性检查通过，可安装到 Antigravity ' + JSON.parse(archive.read('package.json')).version + '。');
     }
     if (!['install', 'uninstall'].includes(command)) throw new Error('使用 install、uninstall 或 check。');
     ensureClosed(app);
