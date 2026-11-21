@@ -1,15 +1,17 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { openAsar, sha256 } = require('./asar.cjs');
+const plugin = require('./plugin.json');
 
-const VERSION = '0.1.8';
 const SUPPORTED = ['2.33.0', '2.34.0'];
 const MARKER = '/* agy-wallpaper-local */';
+const VERSION_LINE = '// wallpaper-version: ' + plugin.version;
 
 function replaceOne(text, anchor, insert) {
     if (text.split(anchor).length !== 2) throw new Error('找不到唯一的扩展接入点。');
@@ -56,7 +58,7 @@ function buildArchive(original) {
             "        if (authority === 'agy-wallpaper') return require('./wallpaper-main.cjs').respond(request);"),
         [handlers]: handlersSource.replace(overlayAnchor,
             "                color: require('./wallpaper-main.cjs').titlebarColor(win, options.color),"),
-        'dist/wallpaper-main.cjs': '// original-sha256: ' + sha256(original) + '\n' + source('wallpaper-main.cjs'),
+        'dist/wallpaper-main.cjs': '// original-sha256: ' + sha256(original) + '\n' + VERSION_LINE + '\n' + source('wallpaper-main.cjs'),
         'dist/wallpaper-library.cjs': source('wallpaper-library.cjs'),
     };
     for (const [file, sourceCode] of Object.entries(changes)) new vm.Script(sourceCode, { filename: file });
@@ -87,6 +89,22 @@ function ensureClosed(directory) {
     if (output.trim()) throw new Error('请先通过 Antigravity 菜单退出应用，再运行此命令。');
 }
 
+function registerPlugin(uninstall) {
+    const directory = path.join(os.homedir(), '.gemini', 'config', 'plugins', plugin.name);
+    const target = path.join(directory, 'plugin.json');
+    if (fs.existsSync(target)) {
+        const registered = JSON.parse(fs.readFileSync(target, 'utf8'));
+        if (registered.name !== plugin.name || registered.homepage !== plugin.homepage) {
+            if (uninstall) return;
+            throw new Error('全局插件目录已有同名清单，无法自动覆盖。');
+        }
+        if (uninstall) return fs.unlinkSync(target);
+    }
+    if (uninstall) return;
+    fs.mkdirSync(directory, { recursive: true });
+    replaceFile(target, fs.readFileSync(path.join(__dirname, 'plugin.json')));
+}
+
 function manage(command, directory) {
     const app = fs.realpathSync(directory);
     if (!fs.existsSync(path.join(app, 'Antigravity.exe'))) throw new Error('找不到 Antigravity.exe。');
@@ -107,22 +125,36 @@ function manage(command, directory) {
     try {
         const original = fs.readFileSync(target);
         const hash = sha256(original);
-        const patched = openAsar(original).read('dist/utils.js').includes(MARKER);
+        const archive = openAsar(original);
+        const patched = archive.read('dist/utils.js').includes(MARKER);
         if (command === 'uninstall') {
-            if (!patched) return console.log('当前应用未加载壁纸扩展。');
-            if (fs.readFileSync(installedHash, 'utf8') !== hash) throw new Error('当前应用文件在安装壁纸后又被修改，无法自动覆盖。');
-            const saved = fs.readFileSync(backup);
-            const firstLine = openAsar(original).read('dist/wallpaper-main.cjs').split('\n', 1)[0];
-            if (firstLine !== '// original-sha256: ' + sha256(saved)) throw new Error('备份与当前补丁不匹配，无法自动恢复。');
-            replaceFile(target, saved);
-            return console.log('已恢复安装壁纸前的应用文件。');
+            if (patched) {
+                if (fs.readFileSync(installedHash, 'utf8') !== hash) throw new Error('当前应用文件在安装壁纸后又被修改，无法自动覆盖。');
+                const saved = fs.readFileSync(backup);
+                const firstLine = archive.read('dist/wallpaper-main.cjs').split('\n', 1)[0];
+                if (firstLine !== '// original-sha256: ' + sha256(saved)) throw new Error('备份与当前补丁不匹配，无法自动恢复。');
+                replaceFile(target, saved);
+            }
+            registerPlugin(true);
+            return console.log('已卸载壁纸扩展。');
         }
-        if (patched) return console.log('壁纸扩展已安装。');
+        if (patched) {
+            if (archive.read('dist/wallpaper-main.cjs').split('\n', 2)[1] !== VERSION_LINE) {
+                throw new Error('请先运行 Uninstall.cmd 卸载旧版壁纸扩展，再重新安装。');
+            }
+            registerPlugin(false);
+            return console.log('聊天壁纸 ' + plugin.version + ' 已注册到全局插件列表。');
+        }
         const next = buildArchive(original);
         replaceFile(backup, original);
         replaceFile(installedHash, sha256(next));
         replaceFile(target, next);
-        console.log('已安装聊天壁纸 ' + VERSION + '。重新打开 Antigravity，点击右下角的 Gemini 猫猫。');
+        try { registerPlugin(false); }
+        catch (error) {
+            replaceFile(target, original);
+            throw error;
+        }
+        console.log('已安装聊天壁纸 ' + plugin.version + '。重新打开 Antigravity，在「自定义配置 → 插件」中管理。');
     } finally {
         fs.closeSync(fd);
         fs.unlinkSync(lock);

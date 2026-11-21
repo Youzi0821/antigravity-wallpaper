@@ -3,12 +3,17 @@
 const { app, ipcMain, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { createHash, randomBytes } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { TYPES, approvedFile, mediaType, projectDirectories, scanLibrary } = require('./wallpaper-library.cjs');
 
 const CHANNEL = 'agy-wallpaper:control';
 const SOURCE = 'plugin://agy-wallpaper';
+const PLUGIN = 'antigravity-wallpaper';
+const agyConfig = path.join(os.homedir(), '.gemini', 'config');
+const pluginSettings = path.join(agyConfig, 'config.json');
+const pluginManifest = path.join(agyConfig, 'plugins', PLUGIN, 'plugin.json');
 const titlebarColors = new WeakMap();
 const DEFAULTS = {
     enabled: false, dim: 45, brightness: 100, saturation: 100, sharpness: 0, grayscale: 0,
@@ -22,6 +27,7 @@ const windows = new Map();
 const library = new Map();
 let config;
 let mediaUrl;
+let pluginEnabled = false;
 
 function normalize(input) {
     const next = { ...DEFAULTS, ...input };
@@ -44,10 +50,39 @@ function configPath() {
 
 function state() {
     const { file, ...settings } = config;
-    return { ...settings, picked: Boolean(file), mediaUrl };
+    return { ...settings, picked: Boolean(file), mediaUrl, pluginEnabled };
+}
+
+function publishState(mediaChanged) {
+    if (mediaChanged) {
+        mediaUrl = pluginEnabled && config.file && config.enabled ? SOURCE + '/' + randomBytes(24).toString('hex') : undefined;
+    }
+    for (const [contents, { origin, titlebar }] of windows) {
+        if (contents.isDestroyed()) continue;
+        if (mediaChanged && titlebar && !titlebar.isDestroyed()) updateTitlebar(titlebar);
+        if (matchingOrigin(contents.getURL(), origin)) contents.send(CHANNEL, state());
+    }
+    return state();
+}
+
+function syncPluginEnabled() {
+    let enabled = fs.existsSync(pluginManifest);
+    if (enabled) {
+        try {
+            const settings = JSON.parse(fs.readFileSync(pluginSettings, 'utf8'));
+            enabled = settings.plugins?.[PLUGIN]?.enabled !== false;
+        } catch (error) {
+            if (error.code !== 'ENOENT') return;
+        }
+    }
+    if (enabled !== pluginEnabled) {
+        pluginEnabled = enabled;
+        publishState(true);
+    }
 }
 
 function setConfig(next) {
+    if (!pluginEnabled) return state();
     const normalized = normalize(next);
     const target = configPath();
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -55,16 +90,8 @@ function setConfig(next) {
     fs.writeFileSync(temp, JSON.stringify(normalized), { mode: 0o600 });
     fs.renameSync(temp, target);
     const mediaChanged = normalized.file !== config.file || normalized.enabled !== config.enabled;
-    if (mediaChanged) {
-        mediaUrl = normalized.file && normalized.enabled ? SOURCE + '/' + randomBytes(24).toString('hex') : undefined;
-    }
     config = normalized;
-    for (const [contents, { origin, titlebar }] of windows) {
-        if (contents.isDestroyed()) continue;
-        if (mediaChanged && titlebar && !titlebar.isDestroyed()) updateTitlebar(titlebar);
-        if (matchingOrigin(contents.getURL(), origin)) contents.send(CHANNEL, state());
-    }
-    return state();
+    return publishState(mediaChanged);
 }
 
 function matchingOrigin(value, origin) {
@@ -126,12 +153,16 @@ function attach(contents, targetUrl, win, backgroundColor) {
         let saved;
         try { saved = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch {}
         config = normalize(saved);
-        if (config.enabled && config.file) mediaUrl = SOURCE + '/' + randomBytes(24).toString('hex');
+        for (const file of [pluginSettings, pluginManifest]) {
+            fs.watchFile(file, { persistent: false, interval: 500 }, syncPluginEnabled);
+        }
+        syncPluginEnabled();
         ipcMain.handle(CHANNEL, async (event, command, payload) => {
             const { origin } = windows.get(event.sender) ?? {};
             if (!origin || !event.senderFrame || event.senderFrame !== event.sender.mainFrame ||
                 !matchingOrigin(event.senderFrame.url, origin)) return null;
             if (command === 'state') return state();
+            if (!pluginEnabled) return null;
             if (command === 'pick') return chooseFile();
             if (command === 'scan') return getLibrary(payload === true);
             if (command === 'select' && library.has(payload)) return setConfig({ ...config, ...library.get(payload), enabled: true });

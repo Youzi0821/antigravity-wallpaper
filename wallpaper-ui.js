@@ -250,6 +250,8 @@
 
         function paint(next) {
             current = { ...next, ...pendingSettings };
+            panel.hidden = !current.pluginEnabled;
+            if (panel.hidden && dialog.open) dialog.close();
             placeMascot(drag?.position ?? current.position);
             placeDialog();
             for (const [key, , , , unit] of CONTROLS) {

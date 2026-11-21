@@ -11,6 +11,11 @@ test('older preferences gain neutral effects and new settings survive a reload',
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-wallpaper-settings-test-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const configPath = path.join(directory, 'wallpaper-settings.json');
+    const agyConfigDir = path.join(directory, '.gemini', 'config');
+    const agyConfig = path.join(agyConfigDir, 'config.json');
+    const manifest = path.join(agyConfigDir, 'plugins', 'antigravity-wallpaper', 'plugin.json');
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, 'plugin.json'), manifest);
     const file = path.join(directory, 'wallpaper.png');
     fs.writeFileSync(configPath, JSON.stringify({ enabled: true, brightness: 125, file }));
     const source = fs.readFileSync(path.join(__dirname, 'wallpaper-main.cjs'), 'utf8');
@@ -21,17 +26,23 @@ test('older preferences gain neutral effects and new settings survive a reload',
 
     function load(win) {
         const module = { exports: {} };
+        const listeners = new Map();
         let handler;
         const electron = {
             app: { getPath: () => directory },
             ipcMain: { handle: (_channel, callback) => { handler = callback; } },
         };
         vm.runInNewContext(source, {
-            module, require: name => name === 'electron' ? electron : require(name),
+            module, require: name => {
+                if (name === 'electron') return electron;
+                if (name === 'node:os') return { homedir: () => directory };
+                if (name === 'node:fs') return { ...fs, watchFile: (file, _options, callback) => listeners.set(file, callback) };
+                return require(name);
+            },
             Response, URL, process: { pid: process.pid, platform: 'win32' },
         });
         module.exports.attach(sender, url, win, '#131313');
-        return { invoke: (command, payload) => handler(event, command, payload), ...module.exports };
+        return { invoke: (command, payload) => handler(event, command, payload), notify: file => listeners.get(file)?.(), ...module.exports };
     }
 
     const first = load();
@@ -96,5 +107,32 @@ test('older preferences gain neutral effects and new settings survive a reload',
         menuSource.updateOrigin(sender, outside);
         frame.url = outside;
         assert.equal(await menuSource.invoke('state'), null);
+    });
+
+    await t.test('the native plugin switch suspends wallpaper and preserves its settings', async () => {
+        frame.url = url;
+        const instance = load(window);
+        const initial = await instance.invoke('state');
+        const saved = fs.readFileSync(configPath, 'utf8');
+        assert.equal(initial.pluginEnabled, true);
+
+        fs.writeFileSync(agyConfig, '{"plugins":{"antigravity-wallpaper":{"enabled":false}}}');
+        instance.notify(agyConfig);
+        assert.equal(overlayColor, '#131313');
+        const off = await instance.invoke('state');
+        assert.equal(off.pluginEnabled, false);
+        assert.equal(off.mediaUrl, undefined);
+        assert.equal(await instance.invoke('settings', { enabled: false }), null);
+        assert.equal(instance.respond({ method: 'GET', url: initial.mediaUrl }).status, 404);
+        assert.equal(fs.readFileSync(configPath, 'utf8'), saved);
+
+        fs.writeFileSync(agyConfig, '{"plugins":{"antigravity-wallpaper":{"enabled":true}}}');
+        instance.notify(agyConfig);
+        assert.equal(overlayColor, '#00000000');
+        assert.ok((await instance.invoke('state')).mediaUrl);
+
+        fs.unlinkSync(manifest);
+        instance.notify(manifest);
+        assert.equal((await instance.invoke('state')).pluginEnabled, false);
     });
 });
