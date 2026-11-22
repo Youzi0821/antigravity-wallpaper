@@ -4,6 +4,7 @@
     const { ipcRenderer } = require('electron');
     const CHANNEL = 'agy-wallpaper:control';
     const MASCOT_URL = 'data:image/webp;base64,__AGY_WALLPAPER_MASCOT__';
+    const BROWSER_HOLE = '[data-browser-hole]:not([data-browser-hole="false"])';
     const CONTROLS = [
         ['dim', '主题遮罩', 0, 95, '%'],
         ['brightness', '亮度', 25, 150, '%'],
@@ -15,17 +16,22 @@
     ];
 
     const PAGE_CSS = `
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) {
+        body[data-agy-wallpaper] {
             isolation: isolate;
             background-color: transparent !important;
             --agy-glass-edge: color-mix(in srgb, var(--foreground, #15161a) 20%, transparent);
+            --agy-glass-tint: color-mix(in srgb, var(--background, #101114) 62%, transparent);
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root :is(
+        body[data-agy-wallpaper] #root :is(
             .agy-shell, .agy-inset-shell,
+            .browser-hole-opaque:has(.agy-home, [data-testid="conversation-view"]),
             .browser-hole-opaque > :has(.agy-home, [data-testid="conversation-view"],
                 [data-testid="sidecars-view"], [data-testid="customizations-search"]),
             .bg-background:has(.agy-shell, [data-testid="conversation-view"], [data-testid="conversation-list-sidebar"]),
             .browser-hole-ancestor.bg-background:not(.aux-drawer-popup, .surface-opaque),
+            .agy-shell > :has(> [data-testid="title-menu-bar"]),
+            .browser-hole-opaque > :has(> [class~="@container/titlebar"]),
+            .overflow-hidden:has(> [data-testid="side-panel-new-tab-view"]),
             [data-testid="conversation-list-sidebar"],
             [data-testid="conversation-list-sidebar"] .bg-sidebar:has(> [data-testid="section-header"]),
             [data-testid="conversation-list-sidebar"] [data-testid="section-header"] > .bg-sidebar,
@@ -38,40 +44,40 @@
         ) {
             background-color: transparent !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root :is(
+        body[data-agy-wallpaper] #root :is(
             .agy-home, [data-testid="conversation-view"],
             .bg-sidebar:has([data-testid="conversation-list-sidebar"])
         ) {
             background-color: color-mix(in srgb, var(--background, #101114) 20%, transparent) !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])):has(
+        body[data-agy-wallpaper]:has(
             [data-testid="sidecars-view"], [data-testid="customizations-search"]
         ) #root .bg-sidebar:has([data-testid="conversation-list-sidebar"]) {
             background-color: transparent !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="featured-carousel-stage"] > .absolute.inset-0[style] {
             background: none !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="conversation-view"] .pointer-events-none.bottom-0[style*="linear-gradient"] {
             background-image: none !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root :is(
+        body[data-agy-wallpaper] #root :is(
             [data-testid="new-conversation-button"], [data-testid="user-message-bubble"]
         ) {
             background-color: color-mix(in srgb, var(--background, #101114) 58%, transparent) !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="new-conversation-button"]:hover {
             background-color: color-mix(in srgb, var(--background, #101114) 72%, transparent) !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="conversation-row-sidebar"].bg-sidebar-secondary {
             --row-bg: color-mix(in srgb, var(--sidebar-secondary, #26282d) 56%, transparent) !important;
             background-color: var(--row-bg) !important;
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="agent-input-box"] .surface-composer {
             background: linear-gradient(155deg,
                 color-mix(in srgb, var(--background, #101114) 64%, transparent),
@@ -82,13 +88,27 @@
                 inset 0 -1px 0 rgb(255 255 255 / 24%),
                 inset 0 0 0 1px var(--agy-glass-edge), 0 8px 26px rgb(0 0 0 / 18%);
         }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) #root
+        body[data-agy-wallpaper] #root
         [data-testid="agent-input-box"] .surface-composer:focus-within {
             outline: 1px solid var(--agy-glass-edge);
             outline-offset: 1px;
         }
+        body[data-agy-wallpaper] #root [data-testid="aux-pane-split"] :is(
+            div:has(> [data-testid="side-panel-new-tab-button"]),
+            [data-testid="side-panel-new-tab-view"],
+            [data-testid="builtin-browser-pane"] > :has(form)
+        ) {
+            background-color: var(--agy-glass-tint) !important;
+            backdrop-filter: blur(20px) saturate(140%);
+            border-color: var(--agy-glass-edge);
+        }
+        body[data-agy-wallpaper]:has([data-testid="side-panel-new-tab-button"]) #root
+        .bg-sidebar:has([data-testid="conversation-list-sidebar"]) {
+            background-color: var(--agy-glass-tint) !important;
+            backdrop-filter: blur(16px) saturate(135%);
+        }
         #agy-wallpaper-layer { display: none; }
-        body[data-agy-wallpaper]:not(:has([data-browser-hole])) > #agy-wallpaper-layer {
+        body[data-agy-wallpaper] > #agy-wallpaper-layer {
             display: block; position: fixed; inset: 0; overflow: hidden;
             z-index: -1; pointer-events: none;
         }
@@ -156,6 +176,37 @@
         return style;
     }
 
+    function preserveBrowserHoles(layer) {
+        let holes = [];
+        function clipWallpaper() {
+            // Antigravity draws the native browser underneath the Hub renderer.
+            // Cut out only its page bounds so the surrounding chrome can show the wallpaper.
+            const cutouts = holes
+                .map(hole => hole.getBoundingClientRect())
+                .filter(rect => rect.width > 0 && rect.height > 0)
+                .map(({ left, top, right, bottom }) => `M${left} ${top}H${right}V${bottom}H${left}Z`);
+            layer.style.clipPath = cutouts.length
+                ? `path(evenodd, "M0 0H${window.innerWidth}V${window.innerHeight}H0Z ${cutouts.join(' ')}")`
+                : '';
+        }
+
+        const resize = new ResizeObserver(clipWallpaper);
+        function trackHoles() {
+            const next = [...document.querySelectorAll(BROWSER_HOLE)];
+            if (next.length === holes.length && next.every((hole, index) => hole === holes[index])) return;
+            resize.disconnect();
+            holes = next;
+            for (const hole of holes) resize.observe(hole);
+            clipWallpaper();
+        }
+
+        new MutationObserver(trackHoles).observe(document.body, {
+            subtree: true, childList: true, attributes: true, attributeFilter: ['data-browser-hole'],
+        });
+        window.addEventListener('resize', clipWallpaper);
+        trackHoles();
+    }
+
     function boot(initial) {
         let current = initial;
         let loadedUrl;
@@ -179,6 +230,7 @@
         background.append(frame, shade);
         document.body.prepend(layer);
         document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet(PAGE_CSS)];
+        preserveBrowserHoles(layer);
 
         const panel = document.createElement('div');
         panel.id = 'agy-wallpaper-panel';
@@ -208,14 +260,13 @@
         mascot.src = MASCOT_URL;
         const dialog = shadow.querySelector('dialog');
         const status = text => { get('status').textContent = text; };
-        const canShow = () => Boolean(loadedUrl && !document.hidden && !document.querySelector('[data-browser-hole]'));
         const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
         const syncMedia = () => {
             if (!loadedUrl) return;
             frame.contentWindow?.postMessage({
                 wallpaperSettings: {
                     speed: current.speed / 100, sharpness: current.sharpness / 100,
-                    playing: canShow() && !reducedMotion.matches,
+                    playing: !document.hidden && !reducedMotion.matches,
                 },
             }, '*');
         };
@@ -408,13 +459,6 @@
         get('search').addEventListener('input', showResults);
         document.addEventListener('visibilitychange', syncMedia);
         reducedMotion.addEventListener('change', syncMedia);
-        let browserVisible = false;
-        new MutationObserver(() => {
-            const visible = Boolean(document.querySelector('[data-browser-hole]'));
-            if (visible === browserVisible) return;
-            browserVisible = visible;
-            syncMedia();
-        }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-browser-hole'] });
         window.addEventListener('message', event => {
             if (!loadedUrl || event.source !== frame.contentWindow) return;
             if (event.data?.wallpaperStatus === 'ready') {
