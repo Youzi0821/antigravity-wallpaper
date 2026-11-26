@@ -1,0 +1,7 @@
+{
+  "description": "Displays your selected local wallpaper in Antigravity desktop windows.",
+  "display_name": "Antigravity Wallpaper",
+  "command": "node.exe",
+  "args": ["run.cjs"],
+  "restart_policy": "always"
+}

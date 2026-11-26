@@ -3,80 +3,23 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const { openAsar, sha256 } = require('./asar.cjs');
 const plugin = require('./plugin.json');
 
-const SUPPORTED = ['2.33.0', '2.34.0'];
-const MARKER = '/* agy-wallpaper-local */';
-const VERSION_LINE = '// wallpaper-version: ' + plugin.version;
-
-function replaceOne(text, anchor, insert) {
-    if (text.split(anchor).length !== 2) throw new Error('找不到唯一的扩展接入点。');
-    return text.replace(anchor, () => insert + '\n' + anchor);
-}
-
-function buildArchive(original) {
-    const archive = openAsar(original);
-    const info = JSON.parse(archive.read('package.json'));
-    if (info.name !== 'antigravity' || !SUPPORTED.includes(info.version)) {
-        throw new Error('此扩展适配 Antigravity ' + SUPPORTED.join('、') + '，当前版本为 ' + info.version + '。');
-    }
-    const utils = 'dist/utils.js';
-    const preload = 'dist/preload.js';
-    const scheme = 'dist/customScheme.js';
-    const handlers = 'dist/ipcHandlers.js';
-    const source = file => fs.readFileSync(path.join(__dirname, file), 'utf8');
-    const mascot = fs.readFileSync(path.join(__dirname, 'gemini-cat.webp'));
-    if (mascot.toString('ascii', 0, 4) !== 'RIFF' || mascot.toString('ascii', 8, 12) !== 'WEBP') {
-        throw new Error('猫猫图标文件损坏。');
-    }
-    const wallpaperUi = source('wallpaper-ui.js').replace('__AGY_WALLPAPER_MASCOT__', mascot.toString('base64'));
-    let utilsSource = archive.read(utils);
-    if (info.version === '2.34.0') {
-        utilsSource = replaceOne(utilsSource, '    void loadHubWindowUrl(win, url, { skipBootstrapMint });',
-            `    ${MARKER} try { if (!skipBootstrapMint) require('./wallpaper-main.cjs').attach(hubContents, url, win, backgroundColor); }
-    catch (error) { console.warn('[Wallpaper]', error.message); }`);
-        utilsSource = replaceOne(utilsSource, '        await win.loadURL(url);',
-            `        try { require('./wallpaper-main.cjs').updateOrigin(getHubWebContents(win), url); }
-        catch (error) { console.warn('[Wallpaper]', error.message); }`);
-    } else {
-        utilsSource = replaceOne(utilsSource, '    void win.loadURL(url);',
-            `    ${MARKER} try { require('./wallpaper-main.cjs').attach(win.webContents, url, options?.partition ? undefined : win, backgroundColor); }
-    catch (error) { console.warn('[Wallpaper]', error.message); }`);
-    }
-    const schemeAnchor = '        const originalHost = exports.extensionAuthorities.get(authority);';
-    const overlayAnchor = '                color: options.color,';
-    const handlersSource = archive.read(handlers);
-    if (handlersSource.split(overlayAnchor).length !== 2) throw new Error('找不到唯一的标题栏配色接入点。');
-    const changes = {
-        [utils]: utilsSource,
-        [preload]: archive.read(preload) + '\n' + wallpaperUi,
-        [scheme]: replaceOne(archive.read(scheme), schemeAnchor,
-            "        if (authority === 'agy-wallpaper') return require('./wallpaper-main.cjs').respond(request);"),
-        [handlers]: handlersSource.replace(overlayAnchor,
-            "                color: require('./wallpaper-main.cjs').titlebarColor(win, options.color),"),
-        'dist/wallpaper-main.cjs': '// original-sha256: ' + sha256(original) + '\n' + VERSION_LINE + '\n' + source('wallpaper-main.cjs'),
-        'dist/wallpaper-library.cjs': source('wallpaper-library.cjs'),
-    };
-    for (const [file, sourceCode] of Object.entries(changes)) new vm.Script(sourceCode, { filename: file });
-    const patched = archive.patch(changes);
-    const check = openAsar(patched);
-    for (const [file, sourceCode] of Object.entries(changes)) {
-        if (check.read(file) !== sourceCode) throw new Error('生成的补丁校验失败。');
-    }
-    return patched;
-}
+const files = [
+    'plugin.json', 'gemini-cat.webp', 'wallpaper-ui.js', 'wallpaper-main.cjs', 'wallpaper-library.cjs',
+    'sidecars/wallpaper/sidecar.json', 'sidecars/wallpaper/run.cjs', 'sidecars/wallpaper/bridge.cjs',
+];
 
 function replaceFile(file, bytes) {
-    const temp = path.join(path.dirname(file), '.agy-wallpaper-' + randomUUID() + '.tmp');
+    const temporary = file + '.' + randomUUID() + '.tmp';
     try {
-        fs.writeFileSync(temp, bytes, { flag: 'wx' });
-        fs.renameSync(temp, file);
+        fs.writeFileSync(temporary, bytes, { flag: 'wx' });
+        fs.renameSync(temporary, file);
     } finally {
-        fs.rmSync(temp, { force: true });
+        fs.rmSync(temporary, { force: true });
     }
 }
 
@@ -89,85 +32,94 @@ function ensureClosed(directory) {
     if (output.trim()) throw new Error('请先通过 Antigravity 菜单退出应用，再运行此命令。');
 }
 
-function registerPlugin(uninstall) {
-    const directory = path.join(os.homedir(), '.gemini', 'config', 'plugins', plugin.name);
-    const target = path.join(directory, 'plugin.json');
-    if (fs.existsSync(target)) {
-        const registered = JSON.parse(fs.readFileSync(target, 'utf8'));
-        if (registered.name !== plugin.name || registered.homepage !== plugin.homepage) {
-            if (uninstall) return;
-            throw new Error('全局插件目录已有同名清单，无法自动覆盖。');
-        }
-        if (uninstall) return fs.unlinkSync(target);
+function legacyPatch(app) {
+    const resources = path.join(app, 'resources');
+    const installedHash = path.join(resources, 'agy-wallpaper-installed.sha256');
+    if (!fs.existsSync(installedHash)) return null;
+    const file = path.join(resources, 'app.asar');
+    if (!fs.existsSync(file)) return null;
+    const patched = fs.readFileSync(file);
+    let wallpaper;
+    try { wallpaper = openAsar(patched).read('dist/wallpaper-main.cjs'); }
+    catch { return null; }
+    if (fs.readFileSync(installedHash, 'utf8').trim() !== sha256(patched)) {
+        throw new Error('旧壁纸补丁安装后又有其他修改，无法自动覆盖应用包。');
     }
-    if (uninstall) return;
-    fs.mkdirSync(directory, { recursive: true });
-    replaceFile(target, fs.readFileSync(path.join(__dirname, 'plugin.json')));
+    const original = fs.readFileSync(path.join(resources, 'agy-wallpaper-original.asar'));
+    if (wallpaper.split('\n', 1)[0] !== '// original-sha256: ' + sha256(original)) {
+        throw new Error('旧壁纸补丁的备份校验失败。');
+    }
+    return { file, original, patched };
 }
 
-function manage(command, directory) {
-    const app = fs.realpathSync(directory);
-    if (!fs.existsSync(path.join(app, 'Antigravity.exe'))) throw new Error('找不到 Antigravity.exe。');
-    const target = path.join(app, 'resources', 'app.asar');
-    const backup = path.join(path.dirname(target), 'agy-wallpaper-original.asar');
-    const installedHash = path.join(path.dirname(target), 'agy-wallpaper-installed.sha256');
-    const lock = path.join(path.dirname(target), 'agy-wallpaper.lock');
-    if (command === 'check') {
-        const bytes = fs.readFileSync(target);
-        const archive = openAsar(bytes);
-        if (archive.read('dist/utils.js').includes(MARKER)) return console.log('壁纸扩展已安装。');
-        buildArchive(bytes);
-        return console.log('兼容性检查通过，可安装到 Antigravity ' + JSON.parse(archive.read('package.json')).version + '。');
+function updatePlugin(directory, installing) {
+    const config = path.dirname(path.dirname(directory));
+    const manifest = path.join(directory, 'plugin.json');
+    const exists = fs.existsSync(directory);
+    if (exists) {
+        if (fs.realpathSync(directory) !== directory) throw new Error('插件目录链接到其他位置。');
+        const existing = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : null;
+        if (existing ? (existing.name !== plugin.name || existing.homepage !== plugin.homepage) : fs.readdirSync(directory).length) {
+            throw new Error('全局插件目录已有其他清单。');
+        }
+    } else if (!installing) {
+        return;
     }
-    if (!['install', 'uninstall'].includes(command)) throw new Error('使用 install、uninstall 或 check。');
-    ensureClosed(app);
-    const fd = fs.openSync(lock, 'wx');
+    fs.mkdirSync(path.dirname(directory), { recursive: true });
+    if (fs.realpathSync(path.dirname(directory)) !== path.dirname(directory)) throw new Error('插件目录链接到其他位置。');
+    const staging = fs.mkdtempSync(path.join(config, '.wallpaper-install-'));
+    const next = path.join(staging, 'new');
+    const previous = path.join(staging, 'previous');
+    let clean = false;
     try {
-        const original = fs.readFileSync(target);
-        const hash = sha256(original);
-        const archive = openAsar(original);
-        const patched = archive.read('dist/utils.js').includes(MARKER);
-        if (command === 'uninstall') {
-            if (patched) {
-                if (fs.readFileSync(installedHash, 'utf8') !== hash) throw new Error('当前应用文件在安装壁纸后又被修改，无法自动覆盖。');
-                const saved = fs.readFileSync(backup);
-                const firstLine = archive.read('dist/wallpaper-main.cjs').split('\n', 1)[0];
-                if (firstLine !== '// original-sha256: ' + sha256(saved)) throw new Error('备份与当前补丁不匹配，无法自动恢复。');
-                replaceFile(target, saved);
+        if (installing) {
+            for (const file of files) {
+                const destination = path.join(next, file);
+                fs.mkdirSync(path.dirname(destination), { recursive: true });
+                fs.copyFileSync(path.join(__dirname, file), destination);
             }
-            registerPlugin(true);
-            return console.log('已卸载壁纸扩展。');
         }
-        if (patched) {
-            if (archive.read('dist/wallpaper-main.cjs').split('\n', 2)[1] !== VERSION_LINE) {
-                throw new Error('请先运行 Uninstall.cmd 卸载旧版壁纸扩展，再重新安装。');
-            }
-            registerPlugin(false);
-            return console.log('聊天壁纸 ' + plugin.version + ' 已注册到全局插件列表。');
-        }
-        const next = buildArchive(original);
-        replaceFile(backup, original);
-        replaceFile(installedHash, sha256(next));
-        replaceFile(target, next);
-        try { registerPlugin(false); }
+        if (exists) fs.renameSync(directory, previous);
+        try { if (installing) fs.renameSync(next, directory); }
         catch (error) {
-            replaceFile(target, original);
+            if (exists) fs.renameSync(previous, directory);
             throw error;
         }
-        console.log('已安装聊天壁纸 ' + plugin.version + '。重新打开 Antigravity，在「自定义配置 → 插件」中管理。');
+        clean = true;
     } finally {
-        fs.closeSync(fd);
-        fs.unlinkSync(lock);
+        const resolved = fs.realpathSync(staging);
+        if ((clean || !fs.existsSync(previous)) && path.dirname(resolved) === config && path.basename(resolved).startsWith('.wallpaper-install-')) {
+            try { fs.rmSync(resolved, { force: true, recursive: true }); }
+            catch { console.warn('请手动清理旧插件文件：' + resolved); }
+        }
     }
 }
-
-module.exports = { buildArchive };
 
 if (require.main === module) {
     try {
-        const [, , command = 'check', flag, directory] = process.argv;
-        if (process.platform !== 'win32' || (flag && (flag !== '--app-dir' || !directory))) throw new Error('用法: node manage.cjs install|uninstall|check [--app-dir 路径]');
-        manage(command, flag ? directory : path.join(process.env.LOCALAPPDATA, 'Programs', 'antigravity'));
+        const [, , command = 'check', flag, supplied] = process.argv;
+        if (process.platform !== 'win32' || !['check', 'install', 'uninstall'].includes(command) ||
+            (flag && (flag !== '--app-dir' || !supplied))) throw new Error('用法: node manage.cjs install|uninstall|check [--app-dir 路径]');
+        if (command === 'install' && (typeof WebSocket !== 'function' || typeof URL.parse !== 'function')) {
+            throw new Error('安装壁纸需要 Node.js 22.1 或更新版本。');
+        }
+        const app = fs.realpathSync(supplied || path.join(process.env.LOCALAPPDATA, 'Programs', 'antigravity'));
+        if (!fs.existsSync(path.join(app, 'Antigravity.exe'))) throw new Error('找不到 Antigravity.exe。');
+        const directory = path.join(os.homedir(), '.gemini', 'config', 'plugins', plugin.name);
+        if (command === 'check') {
+            const sidecar = fs.existsSync(path.join(directory, 'sidecars', 'wallpaper', 'run.cjs'));
+            console.log(sidecar ? '壁纸 sidecar 已安装。' : '可安装壁纸 sidecar。');
+        } else {
+            ensureClosed(app);
+            const legacy = legacyPatch(app);
+            if (legacy) replaceFile(legacy.file, legacy.original);
+            try { updatePlugin(directory, command === 'install'); }
+            catch (error) {
+                if (legacy) replaceFile(legacy.file, legacy.patched);
+                throw error;
+            }
+            console.log(command === 'install' ? '已安装壁纸 ' + plugin.version + '。从原快捷方式打开 Antigravity。' : '已卸载壁纸插件。');
+        }
     } catch (error) {
         console.error('壁纸扩展: ' + error.message);
         process.exitCode = 1;

@@ -1,16 +1,18 @@
 # Antigravity 聊天壁纸
 
-Windows 本地外观扩展，适配 Google Antigravity 2.33.0 和 2.34.0 独立桌面版。可以在应用背景中播放已有的 Wallpaper Engine 视频壁纸，或显示自己的图片。
+Windows 本地外观扩展。由 Google Antigravity 桌面版启动 sidecar，自动连接本机窗口。可以在应用背景中播放已有的 Wallpaper Engine 视频壁纸，或显示自己的图片。已验证 Antigravity 2.35.2。
 
 Windows 安装包和 SHA-256 校验文件见 [GitHub 发布页](https://github.com/Youzi0821/antigravity-wallpaper/releases)。这个项目是独立的社区扩展。
 
 ## 安装
 
-1. 解压安装包，保留目录里的脚本和源文件。需要已安装 Node.js 20 或更新版本。
+1. 解压安装包，保留目录里的脚本和源文件。需要将 Node.js 22.1 或更新版本加入 PATH。
 2. 从 Antigravity 菜单退出应用，双击 `Install.cmd`。
-3. 打开 Antigravity。在「自定义配置 → 已安装 → 插件」中可以找到全局插件 **Antigravity Wallpaper**。点击窗口右下角的 Gemini 猫猫图标设置壁纸。
+3. 从已配置本机调试端口的快捷方式打开 Antigravity。在「自定义配置 → 已安装 → 插件」中启用 **Antigravity Wallpaper**，然后点击窗口右下角的 Gemini 猫猫图标设置壁纸。
 
-若旧版壁纸扩展仍在生效，先运行 `Uninstall.cmd`，再安装新版。若 Antigravity 更新已覆盖壁纸扩展，直接运行 `Install.cmd` 即可。已有的壁纸偏好会保留。
+从旧版升级时直接运行新版 `Install.cmd`。如果旧版应用补丁仍在生效，安装器会校验备份、还原原版应用包并保留壁纸设置。
+
+如果已经用同一个快捷方式运行 agy-capsule 或 Hagemi Pet，可以继续使用它。首次配置可在 Antigravity 快捷方式的「目标」末尾加上 ` --remote-debugging-address=127.0.0.1 --remote-debugging-port=0`。应用更新后若快捷方式被重置，需要恢复这两个参数。
 
 ## 使用
 
@@ -23,19 +25,19 @@ Windows 安装包和 SHA-256 校验文件见 [GitHub 发布页](https://github.c
 - 壁纸启用时，新建对话和已有对话的发送框使用透明玻璃样式。
 - 打开内置浏览器时，聊天区继续显示壁纸，右侧工作台的标签栏、地址栏和新标签页使用毛玻璃样式。
 - 「自动化」和「自定义配置」的内容区与侧栏共用同一层壁纸。
-- 壁纸可以延伸到原有菜单栏和 Windows 窗口按钮后面。
+- 壁纸延伸到应用内菜单栏。Windows 原生最小化、最大化和关闭按钮的背景由 Antigravity 绘制。
 
 ## 卸载
 
-退出 Antigravity 后，双击 `Uninstall.cmd`。卸载脚本会移除全局插件条目，并校验和恢复备份的 `app.asar`。壁纸偏好保存在 Antigravity 用户数据目录的 `wallpaper-settings.json`。
+退出 Antigravity 后，双击 `Uninstall.cmd`。壁纸偏好保存在 Antigravity 用户数据目录的 `wallpaper-settings.json`。
 
-安装脚本将 `plugin.json` 注册到 `~/.gemini/config/plugins/antigravity-wallpaper/`，并安装渲染壁纸所需的桌面端补丁。
+安装脚本将插件注册到 `~/.gemini/config/plugins/antigravity-wallpaper/`。AGY 负责启动 sidecar，sidecar 会在窗口重载后重新挂载壁纸。运行期间无需改写 `app.asar` 或维护 AGY 版本号白名单。
 
-应用更新可能覆盖扩展。安装器会验证版本和需要的接口，发现版本不符时停止。若另一项修改在安装之后改过同一个应用包，卸载器会拒绝自动覆盖。
+如果未来 AGY 改变调试接口或界面结构，对应的渲染仍可能需要更新。
 
 ## 源码与测试
 
-安装包包含完整扩展源码和测试，运行时无需额外的 npm 依赖。安装器从本机的 Antigravity 生成补丁，发布包只包含本项目文件。
+安装包包含完整扩展源码和测试，运行时无需额外的 npm 依赖。
 
 ```powershell
 node --test wallpaper-library.test.cjs wallpaper-settings.test.cjs

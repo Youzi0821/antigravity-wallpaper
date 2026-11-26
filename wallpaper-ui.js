@@ -1,8 +1,6 @@
-;(() => {
+(function mountWallpaper(bridge, initial) {
     'use strict';
 
-    const { ipcRenderer } = require('electron');
-    const CHANNEL = 'agy-wallpaper:control';
     const MASCOT_URL = 'data:image/webp;base64,__AGY_WALLPAPER_MASCOT__';
     const BROWSER_HOLE = '[data-browser-hole]:not([data-browser-hole="false"])';
     const CONTROLS = [
@@ -176,7 +174,7 @@
         return style;
     }
 
-    function preserveBrowserHoles(layer) {
+    function preserveBrowserHoles(layer, signal) {
         let holes = [];
         function clipWallpaper() {
             // Antigravity draws the native browser underneath the Hub renderer.
@@ -200,14 +198,18 @@
             clipWallpaper();
         }
 
-        new MutationObserver(trackHoles).observe(document.body, {
+        const mutations = new MutationObserver(trackHoles);
+        mutations.observe(document.body, {
             subtree: true, childList: true, attributes: true, attributeFilter: ['data-browser-hole'],
         });
-        window.addEventListener('resize', clipWallpaper);
+        window.addEventListener('resize', clipWallpaper, { signal });
+        signal.addEventListener('abort', () => { mutations.disconnect(); resize.disconnect(); }, { once: true });
         trackHoles();
     }
 
     function boot(initial) {
+        const lifetime = new AbortController();
+        const { signal } = lifetime;
         let current = initial;
         let loadedUrl;
         let results = [];
@@ -229,8 +231,9 @@
         const shade = document.createElement('div');
         background.append(frame, shade);
         document.body.prepend(layer);
-        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet(PAGE_CSS)];
-        preserveBrowserHoles(layer);
+        const pageStyles = sheet(PAGE_CSS);
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, pageStyles];
+        preserveBrowserHoles(layer, signal);
 
         const panel = document.createElement('div');
         panel.id = 'agy-wallpaper-panel';
@@ -300,6 +303,7 @@
         }
 
         function paint(next) {
+            if (signal.aborted) return;
             current = { ...next, ...pendingSettings };
             panel.hidden = !current.pluginEnabled;
             if (panel.hidden && dialog.open) dialog.close();
@@ -332,7 +336,7 @@
         }
 
         async function run(command, value) {
-            try { return await ipcRenderer.invoke(CHANNEL, command, value); }
+            try { return await bridge.invoke(command, value); }
             catch { status('壁纸操作失败，请检查文件或文件夹访问权限。'); return null; }
         }
 
@@ -384,7 +388,7 @@
             const box = opener.getBoundingClientRect();
             drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: box.left, top: box.top };
             suppressClick = false;
-        }, true);
+        }, { capture: true, signal });
         window.addEventListener('pointermove', event => {
             if (!drag || event.pointerId !== drag.id) return;
             if (event.buttons === 0) return finishDrag(event);
@@ -398,7 +402,7 @@
             event.preventDefault();
             drag.position = positionFromPixels(drag.left + dx, drag.top + dy);
             placeMascot(drag.position);
-        }, true);
+        }, { capture: true, signal });
         function finishDrag(event) {
             if (!drag || event.pointerId !== drag.id) return;
             const position = drag.position;
@@ -408,7 +412,7 @@
             if (position && event.type === 'pointerup') change('position', position);
             else placeMascot(current.position);
         }
-        for (const type of ['pointerup', 'pointercancel']) window.addEventListener(type, finishDrag, true);
+        for (const type of ['pointerup', 'pointercancel']) window.addEventListener(type, finishDrag, { capture: true, signal });
         const arrowSteps = { ArrowLeft: [-12, 0], ArrowRight: [12, 0], ArrowUp: [0, -12], ArrowDown: [0, 12] };
         opener.addEventListener('keydown', event => {
             if (!event.isTrusted || !Object.hasOwn(arrowSteps, event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -429,8 +433,9 @@
         window.addEventListener('resize', () => {
             placeMascot(drag?.position ?? current.position);
             placeDialog();
-        });
-        new ResizeObserver(placeDialog).observe(dialog);
+        }, { signal });
+        const dialogSize = new ResizeObserver(placeDialog);
+        dialogSize.observe(dialog);
         get('close').addEventListener('click', () => dialog.close());
         dialog.addEventListener('close', () => opener.focus());
         get('pick').addEventListener('click', async event => {
@@ -457,8 +462,8 @@
             });
         }
         get('search').addEventListener('input', showResults);
-        document.addEventListener('visibilitychange', syncMedia);
-        reducedMotion.addEventListener('change', syncMedia);
+        document.addEventListener('visibilitychange', syncMedia, { signal });
+        reducedMotion.addEventListener('change', syncMedia, { signal });
         window.addEventListener('message', event => {
             if (!loadedUrl || event.source !== frame.contentWindow) return;
             if (event.data?.wallpaperStatus === 'ready') {
@@ -469,17 +474,23 @@
                 paint(current);
                 status('无法播放这张壁纸，请选择其他文件。');
             }
-        });
+        }, { signal });
         frame.addEventListener('load', syncMedia);
-        ipcRenderer.on(CHANNEL, (_event, next) => paint(next));
         document.body.append(panel);
         paint(initial);
+        return {
+            paint,
+            dispose() {
+                lifetime.abort();
+                clearTimeout(saveTimer);
+                dialogSize.disconnect();
+                panel.remove();
+                layer.remove();
+                document.adoptedStyleSheets = document.adoptedStyleSheets.filter(style => style !== pageStyles);
+                document.body?.removeAttribute('data-agy-wallpaper');
+            },
+        };
     }
 
-    if (window.top === window && location.protocol === 'https:' && location.hostname === '127.0.0.1') {
-        window.addEventListener('DOMContentLoaded', async () => {
-            const state = await ipcRenderer.invoke(CHANNEL, 'state').catch(() => null);
-            if (state) boot(state);
-        }, { once: true });
-    }
-})();
+    return boot(initial);
+});

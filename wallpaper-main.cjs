@@ -1,20 +1,11 @@
 'use strict';
 
-const { app, ipcMain, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { createHash, randomBytes } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { TYPES, approvedFile, mediaType, projectDirectories, scanLibrary } = require('./wallpaper-library.cjs');
 
-const CHANNEL = 'agy-wallpaper:control';
-const SOURCE = 'plugin://agy-wallpaper';
-const PLUGIN = 'antigravity-wallpaper';
-const agyConfig = path.join(os.homedir(), '.gemini', 'config');
-const pluginSettings = path.join(agyConfig, 'config.json');
-const pluginManifest = path.join(agyConfig, 'plugins', PLUGIN, 'plugin.json');
-const titlebarColors = new WeakMap();
 const DEFAULTS = {
     enabled: false, dim: 45, brightness: 100, saturation: 100, sharpness: 0, grayscale: 0,
     blur: 0, speed: 100, flip: false, position: null, file: '', title: '',
@@ -23,12 +14,6 @@ const LIMITS = {
     dim: [0, 95], brightness: [25, 150], saturation: [0, 200], sharpness: [0, 100],
     grayscale: [0, 100], blur: [0, 24], speed: [50, 200],
 };
-const windows = new Map();
-const library = new Map();
-let config;
-let mediaUrl;
-let pluginEnabled = false;
-
 function normalize(input) {
     const next = { ...DEFAULTS, ...input };
     for (const [key, [min, max]] of Object.entries(LIMITS)) {
@@ -44,145 +29,86 @@ function normalize(input) {
     return next;
 }
 
-function configPath() {
-    return path.join(app.getPath('userData'), 'wallpaper-settings.json');
-}
-
-function state() {
-    const { file, ...settings } = config;
-    return { ...settings, picked: Boolean(file), mediaUrl, pluginEnabled };
-}
-
-function publishState(mediaChanged) {
-    if (mediaChanged) {
-        mediaUrl = pluginEnabled && config.file && config.enabled ? SOURCE + '/' + randomBytes(24).toString('hex') : undefined;
+function createWallpaper({ settingsFile, mediaOrigin, hubOrigin, pick, publish }) {
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch {}
+    let config = normalize(saved);
+    const library = new Map();
+    const mediaUrl = () => config.file && config.enabled && url ? url.href : undefined;
+    let url;
+    function renewMedia() {
+        url = new URL('/' + randomBytes(24).toString('hex'), mediaOrigin);
     }
-    for (const [contents, { origin, titlebar }] of windows) {
-        if (contents.isDestroyed()) continue;
-        if (mediaChanged && titlebar && !titlebar.isDestroyed()) updateTitlebar(titlebar);
-        if (matchingOrigin(contents.getURL(), origin)) contents.send(CHANNEL, state());
-    }
-    return state();
-}
+    renewMedia();
 
-function syncPluginEnabled() {
-    let enabled = fs.existsSync(pluginManifest);
-    if (enabled) {
+    function state() {
+        const { file, ...settings } = config;
+        return { ...settings, picked: Boolean(file), mediaUrl: mediaUrl(), pluginEnabled: true };
+    }
+
+    function setConfig(next) {
+        const normalized = normalize(next);
+        const temp = settingsFile + '.' + process.pid + '.tmp';
+        fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
         try {
-            const settings = JSON.parse(fs.readFileSync(pluginSettings, 'utf8'));
-            enabled = settings.plugins?.[PLUGIN]?.enabled !== false;
-        } catch (error) {
-            if (error.code !== 'ENOENT') return;
+            fs.writeFileSync(temp, JSON.stringify(normalized), { mode: 0o600 });
+            fs.renameSync(temp, settingsFile);
+        } finally {
+            fs.rmSync(temp, { force: true });
         }
+        if (normalized.file !== config.file || normalized.enabled !== config.enabled) renewMedia();
+        config = normalized;
+        const nextState = state();
+        publish(nextState);
+        return nextState;
     }
-    if (enabled !== pluginEnabled) {
-        pluginEnabled = enabled;
-        publishState(true);
-    }
-}
 
-function setConfig(next) {
-    if (!pluginEnabled) return state();
-    const normalized = normalize(next);
-    const target = configPath();
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const temp = target + '.' + process.pid + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify(normalized), { mode: 0o600 });
-    fs.renameSync(temp, target);
-    const mediaChanged = normalized.file !== config.file || normalized.enabled !== config.enabled;
-    config = normalized;
-    return publishState(mediaChanged);
-}
-
-function matchingOrigin(value, origin) {
-    try { return new URL(value).origin === origin; } catch { return false; }
-}
-
-async function chooseFile() {
-    const result = await dialog.showOpenDialog({
-        title: '选择壁纸',
-        properties: ['openFile'],
-        filters: [{ name: '图片和视频', extensions: Object.keys(TYPES).map(ext => ext.slice(1)) }],
-    });
-    if (result.canceled) return state();
-    const file = await approvedFile(result.filePaths[0]);
-    if (!file) throw new Error('无法读取壁纸文件');
-    return setConfig({ ...config, file, title: path.basename(file), enabled: true });
-}
-
-async function getLibrary(chooseFolder) {
-    let roots;
-    if (chooseFolder) {
-        const result = await dialog.showOpenDialog({ title: '选择 Steam 库或 Wallpaper Engine 创意工坊文件夹', properties: ['openDirectory'] });
-        if (result.canceled) return null;
-        const folder = result.filePaths[0];
-        roots = [folder, ...projectDirectories(folder)];
-    }
-    const items = await scanLibrary(roots);
-    return items.map(({ file, title, preview }) => {
-        const id = createHash('sha256').update(file).digest('hex');
-        library.set(id, { file, title });
-        return { id, title, preview };
-    });
-}
-
-function titlebarColor(win, color) {
-    if (!titlebarColors.has(win)) return color;
-    titlebarColors.set(win, color);
-    return mediaUrl ? '#00000000' : color;
-}
-
-function updateTitlebar(win) {
-    win.setTitleBarOverlay({ color: mediaUrl ? '#00000000' : titlebarColors.get(win) });
-}
-
-function localOrigin(targetUrl) {
-    const target = new URL(targetUrl);
-    if (target.protocol === 'https:' && target.hostname === '127.0.0.1' && target.port) return target.origin;
-}
-
-function updateOrigin(contents, targetUrl) {
-    const entry = windows.get(contents);
-    if (entry) entry.origin = localOrigin(targetUrl);
-}
-
-function attach(contents, targetUrl, win, backgroundColor) {
-    const origin = localOrigin(targetUrl);
-    if (!origin) return;
-    if (!config) {
-        let saved;
-        try { saved = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch {}
-        config = normalize(saved);
-        for (const file of [pluginSettings, pluginManifest]) {
-            fs.watchFile(file, { persistent: false, interval: 500 }, syncPluginEnabled);
+    async function command(name, value) {
+        if (name === 'state') return state();
+        if (name === 'pick') {
+            const selected = await pick(false, Object.keys(TYPES).map(ext => '*' + ext).join(';'));
+            if (!selected) return state();
+            const file = await approvedFile(selected);
+            if (!file) throw new Error('无法读取壁纸文件');
+            return setConfig({ ...config, file, title: path.basename(file), enabled: true });
         }
-        syncPluginEnabled();
-        ipcMain.handle(CHANNEL, async (event, command, payload) => {
-            const { origin } = windows.get(event.sender) ?? {};
-            if (!origin || !event.senderFrame || event.senderFrame !== event.sender.mainFrame ||
-                !matchingOrigin(event.senderFrame.url, origin)) return null;
-            if (command === 'state') return state();
-            if (!pluginEnabled) return null;
-            if (command === 'pick') return chooseFile();
-            if (command === 'scan') return getLibrary(payload === true);
-            if (command === 'select' && library.has(payload)) return setConfig({ ...config, ...library.get(payload), enabled: true });
-            if (command === 'settings' && payload && typeof payload === 'object') {
-                const next = { ...config };
-                for (const key of [...Object.keys(LIMITS), 'enabled', 'flip', 'position']) {
-                    if (Object.hasOwn(payload, key)) next[key] = payload[key];
-                }
-                return setConfig(next);
+        if (name === 'scan') {
+            let roots;
+            if (value === true) {
+                const folder = await pick(true);
+                if (!folder) return null;
+                roots = [folder, ...projectDirectories(folder)];
             }
-            return null;
-        });
+            const items = await scanLibrary(roots);
+            library.clear();
+            return items.map(({ file, title, preview }) => {
+                const id = createHash('sha256').update(file).digest('hex');
+                library.set(id, { file, title });
+                return { id, title, preview };
+            });
+        }
+        if (name === 'select' && library.has(value)) {
+            return setConfig({ ...config, ...library.get(value), enabled: true });
+        }
+        if (name === 'settings' && value && typeof value === 'object') {
+            const next = { ...config };
+            for (const key of [...Object.keys(LIMITS), 'enabled', 'flip', 'position']) {
+                if (Object.hasOwn(value, key)) next[key] = value[key];
+            }
+            return setConfig(next);
+        }
+        return null;
     }
-    const titlebar = process.platform === 'win32' && typeof win?.setTitleBarOverlay === 'function' ? win : undefined;
-    windows.set(contents, { origin, titlebar });
-    if (titlebar) {
-        titlebarColors.set(titlebar, backgroundColor);
-        if (mediaUrl) updateTitlebar(titlebar);
+
+    function respond(request) {
+        if (request.method !== 'GET' || !mediaUrl() ||
+            (request.url !== url.href && request.url !== url.href + '/media')) return new Response(null, { status: 404 });
+        const { file } = config;
+        const mime = mediaType(file);
+        return request.url === url.href ? serveFrame(url, mime, hubOrigin) : serveMedia(request, file, mime);
     }
-    contents.once('destroyed', () => windows.delete(contents));
+
+    return { command, respond, state };
 }
 
 const FRAME_SCRIPT = `
@@ -212,13 +138,13 @@ if (!video && media.complete) parent.postMessage({ wallpaperStatus: media.natura
 const FRAME_HASH = createHash('sha256').update(FRAME_SCRIPT).digest('base64');
 const SHARPEN_FILTER = '<svg width="0" height="0" aria-hidden="true" style="position:absolute"><filter id="agy-media-sharpen" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" divisor="1" preserveAlpha="true" edgeMode="duplicate"/></filter></svg>';
 
-function serveFrame(url, mime) {
+function serveFrame(url, mime, hubOrigin) {
     const video = mime.startsWith('video/');
     const media = video ? '<video muted loop playsinline preload="auto" disablepictureinpicture' : '<img alt=""';
     return new Response(`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}img,video{width:100%;height:100%;object-fit:cover;display:block}</style>${SHARPEN_FILTER}${media} src="${url}/media">${video ? '</video>' : ''}<script>${FRAME_SCRIPT}</script>`, {
         headers: {
             'Content-Type': 'text/html; charset=utf-8',
-            'Content-Security-Policy': `default-src 'none'; img-src ${SOURCE}; media-src ${SOURCE}; style-src 'unsafe-inline'; script-src 'sha256-${FRAME_HASH}'; base-uri 'none'; form-action 'none'`,
+            'Content-Security-Policy': `default-src 'none'; img-src ${url.origin}; media-src ${url.origin}; style-src 'unsafe-inline'; script-src 'sha256-${FRAME_HASH}'; base-uri 'none'; form-action 'none'; frame-ancestors ${hubOrigin}`,
             'Cache-Control': 'no-store',
         },
     });
@@ -262,12 +188,4 @@ async function serveMedia(request, file, mime) {
     }
 }
 
-function respond(request) {
-    const { url } = request;
-    if (request.method !== 'GET' || !mediaUrl || (url !== mediaUrl && url !== mediaUrl + '/media')) return new Response(null, { status: 404 });
-    const file = config.file;
-    const mime = mediaType(file);
-    return url === mediaUrl ? serveFrame(mediaUrl, mime) : serveMedia(request, file, mime);
-}
-
-module.exports = { attach, respond, titlebarColor, updateOrigin };
+module.exports = { createWallpaper };
