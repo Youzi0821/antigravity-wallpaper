@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "antigravity-wallpaper",
   "displayName": "Antigravity Wallpaper",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "为 Antigravity 聊天窗口设置本地图片、循环视频或 Wallpaper Engine 壁纸。",
   "homepage": "https://github.com/Youzi0821/antigravity-wallpaper"
 }

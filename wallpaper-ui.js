@@ -35,6 +35,7 @@
             [data-testid="conversation-list-sidebar"] [data-testid="section-header"] > .bg-sidebar,
             [data-testid="title-menu-bar"],
             [data-testid="pane-titlebar-toolbar"] [class~="bg-[var(--shell-canvas)]"],
+            div:has(> [data-testid="toggle-aux-sidebar"]),
             [data-testid="agent-input-box"] .surface-composer-card,
             [data-testid="sidecars-view"],
             :is(.bg-background.overflow-hidden, .sticky.bg-background):has([data-testid="customizations-search"]),

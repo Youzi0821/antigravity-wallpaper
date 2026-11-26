@@ -51,6 +51,8 @@ async function start() {
     const data = path.resolve(gemini, process.env.ANTIGRAVITY_APP_DATA_DIR || 'antigravity');
     const origin = await hubOrigin(data, process.env.ANTIGRAVITY_LS_ADDRESS);
     if (!origin) throw new Error('AGY did not provide a local Hub session');
+    // A Windows process can hold its working directory open during a plugin upgrade.
+    process.chdir(data);
     const [ui, mascot] = await Promise.all([
         fs.readFile(path.join(root, 'wallpaper-ui.js'), 'utf8'),
         fs.readFile(path.join(root, 'gemini-cat.webp')),
